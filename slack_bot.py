@@ -8,6 +8,9 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
 FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
 
+# מזהה הקבוצה "SE - Service Engineer" ב-Freshdesk (יש לבדוק ב-API של Freshdesk את ה-group_id המתאים)
+GROUP_ID = 123456  # צריך לשנות ל-ID הנכון
+
 if not SLACK_BOT_TOKEN or not FRESHDESK_API_KEY or not FRESHDESK_DOMAIN:
     raise ValueError("Missing SLACK_BOT_TOKEN or FRESHDESK_API_KEY in environment variables.")
 
@@ -26,7 +29,7 @@ def get_tickets(robot_number, search_range="2w"):
     page = 1
 
     while len(tickets) < 300:
-        url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets?page={page}&per_page=100&updated_since={search_date}"
+        url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets?page={page}&per_page=100&updated_since={search_date}&filter_group_id={GROUP_ID}"
         response = requests.get(url, auth=(FRESHDESK_API_KEY, "X"))
 
         if response.status_code != 200:
@@ -43,11 +46,13 @@ def get_tickets(robot_number, search_range="2w"):
 
 def format_ticket_response(tickets, robot_number):
     formatted_tickets = []
-    robot_number_short = robot_number.lstrip("LR0")  # תומך גם ב-2144 וגם ב-LR00002144
+    robot_number_short = robot_number.lstrip("LR0")  # תומך גם בפורמט עם אפסים וגם ללא
 
     for ticket in tickets:
         subject = ticket["subject"]
-        status = ticket.get("status", "Unknown")  # נוסיף סטטוס לטיקט
+        status = ticket.get("status", "Unknown")
+        priority = ticket.get("priority", "N/A")
+
         if robot_number in subject or robot_number_short in subject:
             ticket_id = ticket["id"]
             created_at = datetime.fromisoformat(ticket['created_at'][:-1]).strftime("%d/%m/%Y")
@@ -56,6 +61,7 @@ def format_ticket_response(tickets, robot_number):
             formatted_tickets.append(f"*Ticket:* <{ticket_link}|#{ticket_id}>\n"
                                      f"*Subject:* {subject}\n"
                                      f"*Status:* {status}\n"
+                                     f"*Priority:* {priority}\n"
                                      f"*Date:* {created_at}\n"
                                      "------------------------------------")
 
