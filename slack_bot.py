@@ -5,14 +5,13 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
-FRESHDESK_DOMAIN = "fabric.freshdesk.com"
+FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN", "fabric.freshdesk.com")
 
-# Ensure API keys are loaded
 if not SLACK_BOT_TOKEN or not FRESHDESK_API_KEY:
     raise ValueError("Missing SLACK_BOT_TOKEN or FRESHDESK_API_KEY in environment variables.")
 
@@ -20,11 +19,11 @@ app = Flask(__name__)
 
 def get_tickets(robot_number, search_range="2_weeks"):
     date_ranges = {
-        "2_weeks": 14,
-        "1_month": 30,
-        "3_months": 90,
+        "2_weeks": 14,  # ברירת מחדל: שבועיים
+        "1m": 30,       # חודש
+        "2m": 60,       # חודשיים
     }
-    days_back = date_ranges.get(search_range, 14)
+    days_back = date_ranges.get(search_range, 14)  # ברירת מחדל: 2_weeks
     search_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tickets = []
@@ -66,13 +65,17 @@ def format_ticket_response(tickets, robot_number):
 @app.route("/slack", methods=["POST"])
 def slack_command():
     data = request.form
-    user_input = data.get("text")
+    user_input = data.get("text", "").strip()
 
     if not user_input:
         return jsonify({"response_type": "ephemeral", "text": "Please provide a robot number."})
 
-    robot_number = user_input.strip()
-    tickets = get_tickets(robot_number)
+    # Extracting robot number and optional search range
+    parts = user_input.split()
+    robot_number = parts[0]
+    search_range = parts[1] if len(parts) > 1 and parts[1] in ["1m", "2m"] else "2_weeks"
+
+    tickets = get_tickets(robot_number, search_range)
 
     if isinstance(tickets, str):
         return jsonify({"response_type": "ephemeral", "text": tickets})
