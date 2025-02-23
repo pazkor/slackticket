@@ -50,15 +50,16 @@ def get_tickets(robot_number, search_range="2_weeks"):
 def format_ticket_response(tickets, robot_number):
     formatted_tickets = []
     
-    # הסרת אפסים מובילים מהמספר כדי להתאים לכל סוגי הכותרות
+    # הסרת אפסים מובילים כדי לתפוס גם גרסאות מקוצרות (לדוגמה, LR00002090 → LR2090)
     robot_number_clean = robot_number.lstrip("0")
+    robot_regex = re.compile(rf"(LR|GR)?0*{robot_number_clean}\b", re.IGNORECASE)  # חיפוש חכם עם וללא אפסים
 
     for ticket in tickets:
         subject = ticket.get("subject", "").strip()
         description = ticket.get("description_text", "").strip()
 
-        # חיפוש פשוט יותר שמאתר את מספר הרובוט בכל מקום בכותרת או בתיאור
-        if robot_number in subject or robot_number in description or robot_number_clean in subject or robot_number_clean in description:
+        # חיפוש גם עם וגם בלי אפסים מובילים
+        if robot_regex.search(subject) or robot_regex.search(description):
             ticket_id = ticket["id"]
             created_at = datetime.fromisoformat(ticket['created_at'][:-1]).strftime("%d/%m/%Y")
             ticket_link = f"https://{FRESHDESK_DOMAIN}/a/tickets/{ticket_id}"
