@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+import re
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -19,17 +20,17 @@ app = Flask(__name__)
 
 def get_tickets(robot_number, search_range="2_weeks"):
     date_ranges = {
-        "2_weeks": 14,  # ברירת מחדל: שבועיים
-        "1m": 30,       # חודש
-        "2m": 60,       # חודשיים
+        "2_weeks": 14,  # Default search: 2 weeks
+        "1m": 30,       # 1 month
+        "2m": 60,       # 2 months
     }
-    days_back = date_ranges.get(search_range, 14)  # ברירת מחדל: 2_weeks
+    days_back = date_ranges.get(search_range, 14)  
     search_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tickets = []
     page = 1
 
-    while len(tickets) < 300:
+    while len(tickets) < 300:  
         url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets?page={page}&per_page=100&updated_since={search_date}"
         response = requests.get(url, auth=(FRESHDESK_API_KEY, "X"))
 
@@ -37,6 +38,7 @@ def get_tickets(robot_number, search_range="2_weeks"):
             return f"API Error: {response.text}"
 
         batch = response.json()
+        
         if not batch:
             break
 
@@ -47,16 +49,22 @@ def get_tickets(robot_number, search_range="2_weeks"):
 
 def format_ticket_response(tickets, robot_number):
     formatted_tickets = []
+    
+    # Regex to detect any format of "Robot: LR00002255" or "Aisle: X | Robot: LR00002255"
+    robot_regex = re.compile(rf"(?:Robot:\s*|Aisle:\s*\d+\s*\|\s*Robot:\s*)?(LR|GR)?0*\b{robot_number}\b", re.IGNORECASE)
 
     for ticket in tickets:
-        if str(robot_number) in ticket["subject"]:
+        subject = ticket.get("subject", "").strip()
+        description = ticket.get("description_text", "").strip()
+
+        # Match robot number in subject or description
+        if robot_regex.search(subject) or robot_regex.search(description):
             ticket_id = ticket["id"]
-            ticket_subject = ticket["subject"]
             created_at = datetime.fromisoformat(ticket['created_at'][:-1]).strftime("%d/%m/%Y")
             ticket_link = f"https://{FRESHDESK_DOMAIN}/a/tickets/{ticket_id}"
 
             formatted_tickets.append(f"*Ticket:* <{ticket_link}|#{ticket_id}>\n"
-                                     f"*Subject:* {ticket_subject}\n"
+                                     f"*Subject:* {subject}\n"
                                      f"*Date:* {created_at}\n"
                                      "------------------------------------")
 
