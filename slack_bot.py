@@ -26,7 +26,7 @@ def get_tickets(robot_number, search_range="2w"):
     page = 1
 
     while len(tickets) < 300:
-        url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets?page={page}&per_page=100&updated_since={search_date}&include=closed"
+        url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets?page={page}&per_page=100&updated_since={search_date}"
         response = requests.get(url, auth=(FRESHDESK_API_KEY, "X"))
 
         if response.status_code != 200:
@@ -47,6 +47,7 @@ def format_ticket_response(tickets, robot_number):
 
     for ticket in tickets:
         subject = ticket["subject"]
+        status = ticket.get("status", "Unknown")  # נוסיף סטטוס לטיקט
         if robot_number in subject or robot_number_short in subject:
             ticket_id = ticket["id"]
             created_at = datetime.fromisoformat(ticket['created_at'][:-1]).strftime("%d/%m/%Y")
@@ -54,6 +55,7 @@ def format_ticket_response(tickets, robot_number):
 
             formatted_tickets.append(f"*Ticket:* <{ticket_link}|#{ticket_id}>\n"
                                      f"*Subject:* {subject}\n"
+                                     f"*Status:* {status}\n"
                                      f"*Date:* {created_at}\n"
                                      "------------------------------------")
 
