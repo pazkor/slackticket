@@ -1,44 +1,38 @@
 import os
 import json
 import requests
-import re
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
-FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN", "fabric.freshdesk.com")
+FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
 
-if not SLACK_BOT_TOKEN or not FRESHDESK_API_KEY:
+if not SLACK_BOT_TOKEN or not FRESHDESK_API_KEY or not FRESHDESK_DOMAIN:
     raise ValueError("Missing SLACK_BOT_TOKEN or FRESHDESK_API_KEY in environment variables.")
 
 app = Flask(__name__)
 
-def get_tickets(robot_number, search_range="2_weeks"):
+def get_tickets(robot_number, search_range="2w"):
     date_ranges = {
-        "2_weeks": 14,  # Default: 2 weeks
-        "1m": 30,       # 1 month
-        "2m": 60,       # 2 months
+        "2w": 14,
+        "1m": 30,
+        "2m": 60
     }
-    days_back = date_ranges.get(search_range, 14)  
+    days_back = date_ranges.get(search_range, 14)
     search_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tickets = []
     page = 1
 
-    while len(tickets) < 300:  
-        url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets?page={page}&per_page=100&updated_since={search_date}"
+    while len(tickets) < 300:
+        url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets?page={page}&per_page=100&updated_since={search_date}&include=closed"
         response = requests.get(url, auth=(FRESHDESK_API_KEY, "X"))
 
         if response.status_code != 200:
             return f"API Error: {response.text}"
 
         batch = response.json()
-        
         if not batch:
             break
 
@@ -49,17 +43,11 @@ def get_tickets(robot_number, search_range="2_weeks"):
 
 def format_ticket_response(tickets, robot_number):
     formatted_tickets = []
-    
-    # הסרת אפסים מובילים כדי לתפוס גם גרסאות מקוצרות (לדוגמה, LR00002090 → LR2090)
-    robot_number_clean = robot_number.lstrip("0")
-    robot_regex = re.compile(rf"(LR|GR)?0*{robot_number_clean}\b", re.IGNORECASE)  # חיפוש חכם עם וללא אפסים
+    robot_number_short = robot_number.lstrip("LR0")  # תומך גם ב-2144 וגם ב-LR00002144
 
     for ticket in tickets:
-        subject = ticket.get("subject", "").strip()
-        description = ticket.get("description_text", "").strip()
-
-        # חיפוש גם עם וגם בלי אפסים מובילים
-        if robot_regex.search(subject) or robot_regex.search(description):
+        subject = ticket["subject"]
+        if robot_number in subject or robot_number_short in subject:
             ticket_id = ticket["id"]
             created_at = datetime.fromisoformat(ticket['created_at'][:-1]).strftime("%d/%m/%Y")
             ticket_link = f"https://{FRESHDESK_DOMAIN}/a/tickets/{ticket_id}"
@@ -74,15 +62,14 @@ def format_ticket_response(tickets, robot_number):
 @app.route("/slack", methods=["POST"])
 def slack_command():
     data = request.form
-    user_input = data.get("text", "").strip()
+    user_input = data.get("text")
 
     if not user_input:
         return jsonify({"response_type": "ephemeral", "text": "Please provide a robot number."})
 
-    # Extracting robot number and optional search range
-    parts = user_input.split()
+    parts = user_input.strip().split()
     robot_number = parts[0]
-    search_range = parts[1] if len(parts) > 1 and parts[1] in ["1m", "2m"] else "2_weeks"
+    search_range = parts[1] if len(parts) > 1 and parts[1] in ["1m", "2m"] else "2w"
 
     tickets = get_tickets(robot_number, search_range)
 
