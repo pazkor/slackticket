@@ -133,10 +133,10 @@ def slack_command():
     data = request.form
     user_id = data.get("user_id")  
     command = data.get("command")  
-    user_input = data.get("text").strip()
+    user_input = data.get("text", "").strip()
 
     if not user_input:
-        return jsonify({"response_type": "ephemeral", "text": "אנא הזן קלט מתאים."})
+        return jsonify({"response_type": "ephemeral", "text": "❌ אנא הזן מספר רובוט או מיקום."})
 
     # אם המשתמש הזין קוד מיקום - נבקש ממנו לבחור אתר
     if command == "/SU":
@@ -150,16 +150,16 @@ def slack_command():
 
     # אם המשתמש בחר אתר אחרי שהזין קוד SU
     elif user_id in USER_SELECTIONS and user_input in SITE_MAP:
-        location_str = USER_SELECTIONS.pop(user_id)  
+        location_str = USER_SELECTIONS.pop(user_id)
         site = SITE_MAP[user_input]
         response_text = format_su_location_by_site(location_str, site)
 
     # שליפת טיקטים לרובוט
     elif command == "/robot_ticket":
         input_parts = user_input.split()
-        if len(input_parts) == 0:
-            return jsonify({"response_type": "ephemeral", "text": "שגיאה: נא להזין מספר רובוט."})
-        
+        if len(input_parts) < 1:
+            return jsonify({"response_type": "ephemeral", "text": "❌ שגיאה: נא להזין מספר רובוט."})
+
         robot_number = input_parts[0].strip()
         search_range = input_parts[1].strip() if len(input_parts) > 1 and input_parts[1] in ["1m", "2m"] else "2_weeks"
 
@@ -171,7 +171,7 @@ def slack_command():
         response_text = format_ticket_response(tickets, robot_number)
 
     else:
-        response_text = "שגיאה בפורמט ההזנה."
+        response_text = "❌ שגיאה בפורמט ההזנה."
 
     return app.response_class(
         response=json.dumps({"response_type": "ephemeral", "text": response_text}, ensure_ascii=False),
