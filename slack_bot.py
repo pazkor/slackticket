@@ -5,22 +5,89 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
-PRIORITY_API_KEY = os.getenv("PRIORITY_API_KEY")
-PRIORITY_API_URL = os.getenv("PRIORITY_API_URL")
+FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
+FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
+
+if not SLACK_BOT_TOKEN or not FRESHDESK_API_KEY:
+    raise ValueError("Missing SLACK_BOT_TOKEN or FRESHDESK_API_KEY in environment variables.")
 
 app = Flask(__name__)
 
-# מילון לאיתור שם האתר לפי מספר
+# רשימת משתמשים עם עדיפות גבוהה
+PRIORITY_USERS = [
+    "adi stav", "alex zeldin", "gabriella kotin", "gali pruzansky", "mor levi",
+    "nevo cohen", "omri geva", "ori avraham", "rotem cohen", "sun ben sela",
+    "war room", "yotam ness", "yonatan daiti"
+]
+
+# מילון בחירת אתר
 SITE_MAP = {
     "1": "עמק",
     "2": "באר שבע",
     "3": "חולון"
 }
 
-# זיכרון זמני לשמירת קלט המשתמש עד לבחירת אתר
-USER_SELECTIONS = {}
+USER_SELECTIONS = {}  # זיכרון זמני לקלט המשתמשים עבור `/SU`
 
-# פונקציה להחזרת מספר העמודות האחרון לכל אתר
+# פונקציה לשליפת טיקטים מ-Freshdesk
+def get_tickets(robot_number, search_range="2_weeks"):
+    date_ranges = {
+        "2_weeks": 14,
+        "1m": 30,
+        "2m": 60
+    }
+    days_back = date_ranges.get(search_range, 14)
+    search_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    tickets = []
+    page = 1
+
+    while len(tickets) < 500:
+        url = f"https://{FRESHDESK_DOMAIN}/api/v2/tickets?page={page}&per_page=100&updated_since={search_date}"
+        response = requests.get(url, auth=(FRESHDESK_API_KEY, "X"))
+
+        if response.status_code != 200:
+            return f"API Error: {response.text}"
+
+        batch = response.json()
+        if not batch:
+            break
+
+        tickets.extend(batch)
+        page += 1
+
+    return tickets
+
+# פורמט טיקטים, נותן עדיפות למשתמשים מסוימים
+def format_ticket_response(tickets, robot_number):
+    formatted_tickets = []
+    priority_tickets = []
+    regular_tickets = []
+
+    for ticket in tickets:
+        if str(robot_number) in ticket["subject"]:
+            ticket_id = ticket["id"]
+            ticket_subject = ticket["subject"]
+            created_at = datetime.fromisoformat(ticket['created_at'][:-1]).strftime("%d/%m/%Y")
+            ticket_link = f"https://{FRESHDESK_DOMAIN}/a/tickets/{ticket_id}"
+            ticket_creator = ticket.get("requester", {}).get("name", "").lower()
+
+            ticket_entry = (f"*Ticket:* <{ticket_link}|#{ticket_id}>\n"
+                            f"*Subject:* {ticket_subject}\n"
+                            f"*Date:* {created_at}\n"
+                            "------------------------------------")
+
+            if ticket_creator in PRIORITY_USERS:
+                priority_tickets.append(ticket_entry)
+            else:
+                regular_tickets.append(ticket_entry)
+
+    formatted_tickets.extend(priority_tickets)
+    formatted_tickets.extend(regular_tickets)
+
+    return "\n".join(formatted_tickets) if formatted_tickets else f"No tickets found for robot {robot_number}."
+
+# שליפת מספר עמודות אחרון לפי אתר
 def get_last_column(aisle, site):
     if site == "עמק":
         last_column_map = {1: 91, 2: 91, 7: 71}
@@ -35,7 +102,7 @@ def get_last_column(aisle, site):
         return None
     return last_column_map.get(aisle, default_last_column)
 
-# פונקציה לפענוח המיקום והחזרת תיאור בעברית
+# חישוב מיקום בהתבסס על האתר שנבחר
 def format_su_location_by_site(location_str, site):
     try:
         aisle, details, cell = location_str.split(":")
@@ -56,51 +123,11 @@ def format_su_location_by_site(location_str, site):
                 f"🔹 קומה: {floor}\n"
                 f"🔹 תא: {cell}\n"
                 f"🔹 מספר עמודות לספור מהכניסה האחורית: {columns_from_back}\n\n"
-                f"הטוט נמצא במעבר {aisle}, בצד {side_desc} (מקדמת המעבר), "
-                f"בעמודה {column}, בקומה {floor}, בתא מספר {cell}.\n"
-                f"אם אתה נכנס מהחלק האחורי, עליך לספור {columns_from_back} עמודות קדימה. ✅\n\n"
-                f"📌 **תזכורת: באתר, המספרים מתחילים מ-0.**")
+                f"📌 **המספרים באתר מתחילים מ-0.**")
     except Exception:
         return f"שגיאה בפענוח המיקום: {location_str}"
 
-# פונקציה לשליפת טיקטים ממערכת Priority
-def get_priority_tickets(robot_number, search_range="2_weeks"):
-    date_ranges = {
-        "2_weeks": 14,
-        "1m": 30,
-        "2m": 60
-    }
-    days_back = date_ranges.get(search_range, 14)
-    search_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-
-    url = f"{PRIORITY_API_URL}/tickets?robot={robot_number}&created_since={search_date}"
-    headers = {"Authorization": f"Bearer {PRIORITY_API_KEY}"}
-
-    response = requests.get(url, headers=headers)
-
-    if response.status_code != 200:
-        return f"API Error: {response.text}"
-
-    return response.json()
-
-# פונקציה לפורמט התוצאה
-def format_ticket_response(tickets, robot_number):
-    formatted_tickets = []
-
-    for ticket in tickets:
-        ticket_id = ticket["ticket_id"]
-        ticket_subject = ticket["subject"]
-        created_at = datetime.strptime(ticket["created_at"], "%Y-%m-%dT%H:%M:%SZ").strftime("%d/%m/%Y")
-        ticket_link = ticket["url"]
-
-        formatted_tickets.append(f"*Ticket:* <{ticket_link}|#{ticket_id}>\n"
-                                 f"*Subject:* {ticket_subject}\n"
-                                 f"*Date:* {created_at}\n"
-                                 "------------------------------------")
-
-    return "\n".join(formatted_tickets) if formatted_tickets else f"No tickets found for robot {robot_number}."
-
-# פונקציה שקולטת פקודות מסלאק
+# קליטת פקודות מסלאק
 @app.route("/slack", methods=["POST"])
 def slack_command():
     data = request.form
@@ -111,30 +138,32 @@ def slack_command():
     if not user_input:
         return jsonify({"response_type": "ephemeral", "text": "אנא הזן קלט מתאים."})
 
-    # אם המשתמש בחר אתר אחרי שהזין קוד SU
-    if user_id in USER_SELECTIONS and user_input in SITE_MAP:
-        location_str = USER_SELECTIONS.pop(user_id)  
-        site = SITE_MAP[user_input]
-        response_text = format_su_location_by_site(location_str, site)
-
     # אם המשתמש הזין קוד מיקום - נבקש ממנו לבחור אתר
-    elif command == "/SU":
+    if command == "/SU":
         USER_SELECTIONS[user_id] = user_input  
         response_text = (
             "📍 אנא בחר את האתר על ידי שליחת מספר מתאים:\n"
             "1️⃣ עמק\n"
             "2️⃣ באר שבע\n"
-            "3️⃣ חולון\n\n"
-            "לדוגמה, הקלד '1' כדי לבחור את עמק."
+            "3️⃣ חולון"
         )
 
-    # פקודת שליפת טיקטים
-    elif command == "/ticket_finder":
+    # אם המשתמש בחר אתר אחרי שהזין קוד SU
+    elif user_id in USER_SELECTIONS and user_input in SITE_MAP:
+        location_str = USER_SELECTIONS.pop(user_id)  
+        site = SITE_MAP[user_input]
+        response_text = format_su_location_by_site(location_str, site)
+
+    # שליפת טיקטים לרובוט
+    elif command == "/robot_ticket":
         input_parts = user_input.split()
+        if len(input_parts) == 0:
+            return jsonify({"response_type": "ephemeral", "text": "שגיאה: נא להזין מספר רובוט."})
+        
         robot_number = input_parts[0].strip()
         search_range = input_parts[1].strip() if len(input_parts) > 1 and input_parts[1] in ["1m", "2m"] else "2_weeks"
 
-        tickets = get_priority_tickets(robot_number, search_range)
+        tickets = get_tickets(robot_number, search_range)
 
         if isinstance(tickets, str):
             return jsonify({"response_type": "ephemeral", "text": tickets})
